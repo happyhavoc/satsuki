@@ -26,6 +26,10 @@ struct Args {
     /// mapping TOML file related to the executable.
     #[argh(option)]
     mapping_file: Option<PathBuf>,
+
+    /// force usage of address zero when disassembling.
+    #[argh(switch)]
+    force_address_zero: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -58,7 +62,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         match executable.get_function(&args.function_name) {
             Some(function) => {
-                let res = function.disassemble(&capstone).unwrap();
+                let res = function
+                    .disassemble(&capstone, args.force_address_zero)
+                    .unwrap();
 
                 println!("{}", res);
             }
@@ -86,7 +92,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         match executable.get_function(&args.function_name) {
             Some(function) => {
-                let res = function.disassemble(&capstone).unwrap();
+                let res = function
+                    .disassemble(&capstone, args.force_address_zero)
+                    .unwrap();
 
                 println!("{}", res);
             }

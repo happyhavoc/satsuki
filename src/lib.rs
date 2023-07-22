@@ -195,7 +195,7 @@ impl Executable {
             if let Some(functions) = mapping.function {
                 for function in functions {
                     if let Some(name) = function.name {
-                        let offset =  function.address - text_section_address;
+                        let offset = function.address - text_section_address;
                         let data = text_data[offset..offset + function.size].to_vec();
 
                         res.add_function(name, function.address, data)?;
@@ -216,8 +216,18 @@ pub struct Function {
 }
 
 impl Function {
-    pub fn disassemble(&self, ctx: &Capstone) -> Result<String, ExecutableError> {
-        let instructions = ctx.disasm_all(&self.data, self.address as u64)?;
+    pub fn disassemble(
+        &self,
+        ctx: &Capstone,
+        force_address_zero: bool,
+    ) -> Result<String, ExecutableError> {
+        let address = if force_address_zero {
+            0
+        } else {
+            self.address as u64
+        };
+
+        let instructions = ctx.disasm_all(&self.data, address)?;
 
         let mut res = String::new();
 
