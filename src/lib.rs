@@ -8,6 +8,7 @@ use std::fmt::Write;
 use capstone::Capstone;
 use object::{File, Object, ObjectSection, ObjectSymbol, SymbolKind};
 use pdb::{FallibleIterator, ProcedureSymbol, Source, SymbolData, PDB};
+use serde::Deserialize;
 
 #[derive(Debug)]
 pub enum ExecutableError {
@@ -40,6 +41,18 @@ impl From<std::fmt::Error> for ExecutableError {
     fn from(error: std::fmt::Error) -> Self {
         Self::WriteError { error }
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FunctionDef {
+    pub name: Option<String>,
+    pub address: usize,
+    pub size: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Mapping {
+    pub function: Option<Vec<FunctionDef>>,
 }
 
 /// Represent some executable
@@ -87,7 +100,7 @@ impl Executable {
         let mut res: Executable = Self::new();
 
         if let Some(text_sec) = raw_obj.section_by_name(".text") {
-            let tex_section_address = text_sec.address() as usize;
+            let text_section_address = text_sec.address() as usize;
             let text_data = text_sec.data()?;
 
             for sym in raw_obj
@@ -98,7 +111,7 @@ impl Executable {
 
                 let address = sym.address() as usize;
                 let size = sym.size() as usize;
-                let offset = address - tex_section_address;
+                let offset = address - text_section_address;
                 let data = text_data[offset..offset + size].to_vec();
 
                 if size == 0 {
@@ -122,7 +135,7 @@ impl Executable {
         let mut res = Self::from_object(raw_obj)?;
 
         if let Some(text_sec) = raw_obj.section_by_name(".text") {
-            let tex_section_address = text_sec.address() as usize;
+            let text_section_address = text_sec.address() as usize;
             let text_data = text_sec.data()?;
 
             let dbi = pdb_file.debug_information()?;
@@ -152,7 +165,7 @@ impl Executable {
 
                                 match res.add_function(
                                     name.into(),
-                                    tex_section_address + offset,
+                                    text_section_address + offset,
                                     data,
                                 ) {
                                     Ok(()) | Err(ExecutableError::FunctionNameConflict { .. }) => {}
@@ -161,6 +174,31 @@ impl Executable {
                             }
                             _ => {}
                         }
+                    }
+                }
+            }
+        }
+
+        Ok(res)
+    }
+
+    pub fn from_object_with_mapping(
+        raw_obj: &File,
+        mapping: Mapping,
+    ) -> Result<Self, ExecutableError> {
+        let mut res = Self::from_object(raw_obj)?;
+
+        if let Some(text_sec) = raw_obj.section_by_name(".text") {
+            let text_section_address = text_sec.address() as usize;
+            let text_data = text_sec.data()?;
+
+            if let Some(functions) = mapping.function {
+                for function in functions {
+                    if let Some(name) = function.name {
+                        let offset =  function.address - text_section_address;
+                        let data = text_data[offset..offset + function.size].to_vec();
+
+                        res.add_function(name, function.address, data)?;
                     }
                 }
             }

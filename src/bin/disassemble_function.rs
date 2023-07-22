@@ -6,6 +6,7 @@ use capstone::{
     prelude::{BuildsCapstone, BuildsCapstoneSyntax},
     Capstone,
 };
+use satsuki::Mapping;
 
 #[derive(FromArgs)]
 /// Disassemble a function by name.
@@ -18,9 +19,13 @@ struct Args {
     #[argh(positional)]
     function_name: String,
 
-    /// executable file to disassemble.
+    /// pdb file related to the executable.
     #[argh(option)]
     pdb_file: Option<PathBuf>,
+
+    /// mapping TOML file related to the executable.
+    #[argh(option)]
+    mapping_file: Option<PathBuf>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -62,7 +67,38 @@ fn main() -> Result<(), Box<dyn Error>> {
                 std::process::exit(1);
             }
         }
+
+        return Ok(());
     }
 
-    Ok(())
+    if let Some(mapping_file) = args.mapping_file {
+        if !mapping_file.exists() {
+            eprintln!("Mapping not found!\n");
+            std::process::exit(1);
+        }
+
+        let bin_data = std::fs::read(args.executable_file)?;
+        let raw_obj = object::File::parse(&*bin_data)?;
+        let raw_mapping = std::fs::read_to_string(mapping_file)?;
+        let mapping = toml::from_str::<Mapping>(&raw_mapping)?;
+
+        let executable = satsuki::Executable::from_object_with_mapping(&raw_obj, mapping).unwrap();
+
+        match executable.get_function(&args.function_name) {
+            Some(function) => {
+                let res = function.disassemble(&capstone).unwrap();
+
+                println!("{}", res);
+            }
+            None => {
+                eprintln!("Function {} not found in executable!", args.function_name);
+                std::process::exit(1);
+            }
+        }
+
+        return Ok(());
+    }
+
+    eprintln!("You must pass --pdb-file for --mapping-file\n");
+    std::process::exit(1)
 }
