@@ -198,7 +198,10 @@ impl Executable {
                         let offset = function.address - text_section_address;
                         let data = text_data[offset..offset + function.size].to_vec();
 
-                        res.add_function(name, function.address, data)?;
+                        match res.add_function(name, function.address, data) {
+                            Ok(()) | Err(ExecutableError::FunctionNameConflict { .. }) => {}
+                            Err(err) => return Err(err),
+                        }
                     }
                 }
             }
