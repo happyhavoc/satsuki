@@ -30,23 +30,27 @@ struct Args {
     /// force usage of address zero when disassembling.
     #[argh(switch)]
     force_address_zero: bool,
+
+    /// use at&t syntax when printing assembly.
+    #[argh(switch)]
+    att: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let capstone = Capstone::new()
-        .x86()
-        .mode(ArchMode::Mode32)
-        .syntax(ArchSyntax::Intel)
-        .detail(true)
-        .build()
-        .expect("Cannot create Capstone context");
-
     let args: Args = argh::from_env();
 
     if !args.executable_file.exists() {
         eprintln!("Executable not found!\n");
         std::process::exit(1);
     }
+
+    let capstone = Capstone::new()
+        .x86()
+        .mode(ArchMode::Mode32)
+        .syntax(if args.att { ArchSyntax::Att } else { ArchSyntax::Intel })
+        .detail(true)
+        .build()
+        .expect("Cannot create Capstone context");
 
     if let Some(pdb_file) = args.pdb_file {
         if !pdb_file.exists() {
