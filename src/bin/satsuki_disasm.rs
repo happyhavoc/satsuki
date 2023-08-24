@@ -25,7 +25,7 @@ struct Args {
 
     /// mapping TOML file related to the executable.
     #[argh(option)]
-    mapping_file: Option<PathBuf>,
+    mapping_file: PathBuf,
 
     /// force usage of address zero when disassembling.
     #[argh(switch)]
@@ -47,10 +47,24 @@ fn main() -> Result<(), Box<dyn Error>> {
     let capstone = Capstone::new()
         .x86()
         .mode(ArchMode::Mode32)
-        .syntax(if args.att { ArchSyntax::Att } else { ArchSyntax::Intel })
+        .syntax(if args.att {
+            ArchSyntax::Att
+        } else {
+            ArchSyntax::Intel
+        })
         .detail(true)
         .build()
         .expect("Cannot create Capstone context");
+
+    if !args.mapping_file.exists() {
+        eprintln!("Mapping not found!\n");
+        std::process::exit(1);
+    }
+
+    let bin_data = std::fs::read(args.executable_file)?;
+    let raw_obj = object::File::parse(&*bin_data)?;
+    let raw_mapping = std::fs::read_to_string(args.mapping_file)?;
+    let mapping = toml::from_str::<Mapping>(&raw_mapping)?;
 
     if let Some(pdb_file) = args.pdb_file {
         if !pdb_file.exists() {
@@ -58,11 +72,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             std::process::exit(1);
         }
 
-        let bin_data = std::fs::read(args.executable_file)?;
-        let raw_obj = object::File::parse(&*bin_data)?;
         let pdb_file = pdb::PDB::open(std::fs::File::open(pdb_file)?)?;
 
-        let executable = satsuki::Executable::from_object_with_pdb(&raw_obj, pdb_file).unwrap();
+        let executable =
+            satsuki::Executable::from_object_with_pdb(&raw_obj, mapping, pdb_file).unwrap();
 
         match executable.get_function(&args.function_name) {
             Some(function) => {
@@ -78,20 +91,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        return Ok(());
-    }
-
-    if let Some(mapping_file) = args.mapping_file {
-        if !mapping_file.exists() {
-            eprintln!("Mapping not found!\n");
-            std::process::exit(1);
-        }
-
-        let bin_data = std::fs::read(args.executable_file)?;
-        let raw_obj = object::File::parse(&*bin_data)?;
-        let raw_mapping = std::fs::read_to_string(mapping_file)?;
-        let mapping = toml::from_str::<Mapping>(&raw_mapping)?;
-
+        Ok(())
+    } else {
         let executable = satsuki::Executable::from_object_with_mapping(&raw_obj, mapping).unwrap();
 
         match executable.get_function(&args.function_name) {
@@ -108,9 +109,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        return Ok(());
+        Ok(())
     }
-
-    eprintln!("You must pass --pdb-file for --mapping-file\n");
-    std::process::exit(1)
 }

@@ -7,7 +7,7 @@ use std::fmt::Write;
 
 use capstone::Capstone;
 use object::{File, Object, ObjectSection, ObjectSymbol, SymbolKind};
-use pdb::{FallibleIterator, ProcedureSymbol, Source, SymbolData, PDB};
+use pdb::{FallibleIterator, ProcedureSymbol, PublicSymbol, Source, SymbolData, PDB};
 use serde::Deserialize;
 
 #[derive(Debug)]
@@ -55,19 +55,29 @@ pub struct Mapping {
     pub function: Option<Vec<FunctionDef>>,
 }
 
+impl Mapping {
+    pub fn get_function_def(&self, name: &str) -> Option<&FunctionDef> {
+        if let Some(function) = &self.function {
+            for f in function {
+                if let Some(f_name) = &f.name {
+                    if f_name == name {
+                        return Some(f);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+}
+
 /// Represent some executable
-#[derive(Clone, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct Executable {
     functions: HashMap<String, Function>,
 }
 
 impl Executable {
-    pub fn new() -> Self {
-        Self {
-            functions: HashMap::new(),
-        }
-    }
-
     pub fn add_function(
         &mut self,
         name: String,
@@ -97,7 +107,7 @@ impl Executable {
     }
 
     pub fn from_object(raw_obj: &File) -> Result<Self, ExecutableError> {
-        let mut res: Executable = Self::new();
+        let mut res: Executable = Self::default();
 
         if let Some(text_sec) = raw_obj.section_by_name(".text") {
             let text_section_address = text_sec.address() as usize;
@@ -125,8 +135,31 @@ impl Executable {
         Ok(res)
     }
 
+    fn add_function_from_pdb(
+        &mut self,
+        text_section_address: usize,
+        text_data: &[u8],
+        name: String,
+        offset: usize,
+        len: usize,
+    ) -> Result<(), ExecutableError> {
+        if len == 0 {
+            return Ok(());
+        }
+
+        let data = text_data[offset..offset + len].to_vec();
+
+        match self.add_function(name, text_section_address + offset, data) {
+            Ok(()) | Err(ExecutableError::FunctionNameConflict { .. }) => {}
+            Err(err) => return Err(err),
+        }
+
+        Ok(())
+    }
+
     pub fn from_object_with_pdb<'s, S>(
         raw_obj: &File,
+        mapping: Mapping,
         mut pdb_file: PDB<'s, S>,
     ) -> Result<Self, ExecutableError>
     where
@@ -146,35 +179,50 @@ impl Executable {
                     let mut iter = module_info.symbols()?;
 
                     while let Some(symbol) = iter.next()? {
-                        match symbol.parse() {
-                            Ok(SymbolData::Procedure(ProcedureSymbol {
-                                name,
+                        if let Ok(SymbolData::Procedure(ProcedureSymbol {
+                            name,
+                            offset,
+                            len,
+                            ..
+                        })) = symbol.parse()
+                        {
+                            let name = name.to_string();
+                            let offset = offset.offset as usize;
+                            let len = len as usize;
+
+                            res.add_function_from_pdb(
+                                text_section_address,
+                                text_data,
+                                name.into(),
                                 offset,
                                 len,
-                                ..
-                            })) => {
-                                let name = name.to_string();
-                                let offset = offset.offset as usize;
-                                let len = len as usize;
-
-                                if len == 0 {
-                                    continue;
-                                }
-
-                                let data = text_data[offset..offset + len].to_vec();
-
-                                match res.add_function(
-                                    name.into(),
-                                    text_section_address + offset,
-                                    data,
-                                ) {
-                                    Ok(()) | Err(ExecutableError::FunctionNameConflict { .. }) => {}
-                                    Err(err) => return Err(err),
-                                }
-                            }
-                            _ => {}
+                            )?;
                         }
                     }
+                }
+            }
+
+            let symbol_table = pdb_file.global_symbols()?;
+
+            let mut symbols = symbol_table.iter();
+            while let Some(symbol) = symbols.next()? {
+                if let Ok(pdb::SymbolData::Public(PublicSymbol {
+                    function: true,
+                    offset,
+                    name,
+                    ..
+                })) = symbol.parse()
+                {
+                    let name = name.to_string();
+                    let offset = offset.offset as usize;
+                    let len = mapping.get_function_def(&name).map(|x| x.size).unwrap_or(0);
+                    res.add_function_from_pdb(
+                        text_section_address,
+                        text_data,
+                        name.into(),
+                        offset,
+                        len,
+                    )?;
                 }
             }
         }
