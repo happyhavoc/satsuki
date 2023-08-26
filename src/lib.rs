@@ -2,8 +2,8 @@
 //!
 //! Simple binary comparison helper tool for Touhou 06.
 
-use std::collections::HashMap;
 use std::fmt::Write;
+use std::{collections::HashMap, error::Error};
 
 use capstone::Capstone;
 use object::{File, Object, ObjectSection, ObjectSymbol, SymbolKind};
@@ -17,6 +17,28 @@ pub enum ExecutableError {
     CapstoneError { error: capstone::Error },
     WriteError { error: std::fmt::Error },
     FunctionNameConflict { function_name: String },
+}
+
+impl std::fmt::Display for ExecutableError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExecutableError::FunctionNameConflict { function_name } => {
+                write!(f, "Function \"{function_name}\" already exist!")
+            }
+            _ => std::fmt::Debug::fmt(self, f),
+        }
+    }
+}
+
+impl Error for ExecutableError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            ExecutableError::ObjectError { error } => Some(error),
+            ExecutableError::PdbError { error } => Some(error),
+            ExecutableError::WriteError { error } => Some(error),
+            _ => None,
+        }
+    }
 }
 
 impl From<object::Error> for ExecutableError {
