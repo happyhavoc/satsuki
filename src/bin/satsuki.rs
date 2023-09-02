@@ -30,6 +30,7 @@ struct TopLevel {
 enum SubCommandEnum {
     Disassemble(DisassembleSubCommand),
     Stats(StatsSubCommand),
+    Badge(BadgeSubCommand),
 }
 
 /// Stats
@@ -51,6 +52,27 @@ struct StatsSubCommand {
     /// output file containing the stats.
     #[argh(option)]
     output_file: Option<PathBuf>,
+}
+
+/// Generate a badge to be used on README.md.
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "badge")]
+struct BadgeSubCommand {
+    /// original executable file to disassemble.
+    #[argh(positional)]
+    original_executable_file: PathBuf,
+
+    /// reimplementation executable file to disassemble.
+    #[argh(positional)]
+    reimplementation_executable_file: PathBuf,
+
+    /// pdb file related to the reimplementation executable.
+    #[argh(positional)]
+    pdb_file: PathBuf,
+
+    /// output file containing the badge json.
+    #[argh(positional)]
+    output_file: PathBuf,
 }
 
 #[derive(FromArgs, PartialEq, Debug)]
@@ -220,6 +242,28 @@ fn handle_stats_report(mapping: Mapping, args: &StatsSubCommand) -> Result<(), B
     Ok(())
 }
 
+fn handle_badge(mapping: Mapping, args: &BadgeSubCommand) -> Result<(), Box<dyn Error>> {
+    let original_executable =
+        parse_object_with_mapping(&args.original_executable_file, mapping.clone())?;
+    let reimplement_executable = parse_object_with_pdb(
+        &args.reimplementation_executable_file,
+        &args.pdb_file,
+        mapping.clone(),
+    )?;
+
+    let mut global_match = 0.0;
+
+    for (_, value) in original_executable.generate_stats(&reimplement_executable) {
+        global_match += value.unwrap_or(0.0);
+    }
+
+    let global_raw_diff = global_match / original_executable.functions_count() as f32;
+    let mut file = File::create(&args.output_file)?;
+    writeln!(file, "{{\"schemaVersion\": 1, \"label\": \"progress\", \"message\": \"{:.1$}%\", \"color\": \"yellow\"}}", global_raw_diff, 2)?;
+
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args: TopLevel = argh::from_env();
 
@@ -234,5 +278,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     match &args.subcommand {
         SubCommandEnum::Disassemble(args) => handle_disassemble(mapping, args),
         SubCommandEnum::Stats(args) => handle_stats_report(mapping, args),
+        SubCommandEnum::Badge(args) => handle_badge(mapping, args),
     }
 }
