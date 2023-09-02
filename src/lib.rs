@@ -2,6 +2,7 @@
 //!
 //! Simple binary comparison helper tool for Touhou 06.
 
+use std::collections::hash_map::Iter;
 use std::fmt::Write;
 use std::{collections::HashMap, error::Error};
 
@@ -65,14 +66,14 @@ impl From<std::fmt::Error> for ExecutableError {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct FunctionDef {
     pub name: Option<String>,
     pub address: usize,
     pub size: usize,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Mapping {
     pub function: Option<Vec<FunctionDef>>,
 }
@@ -124,8 +125,36 @@ impl Executable {
         Ok(())
     }
 
+    pub fn functions_count(&self) -> usize {
+        self.functions.len()
+    }
+
+    pub fn functions_iter(&self) -> Iter<'_, String, Function> {
+        self.functions.iter()
+    }
+
     pub fn get_function(&self, name: &String) -> Option<&Function> {
         self.functions.get(name)
+    }
+
+    pub fn get_function_stat(&self, other: &Self, name: &String) -> Option<f32> {
+        match (self.get_function(name), other.get_function(name)) {
+            (Some(a), Some(b)) => Some(a.compute_raw_diff(b)),
+            _ => None,
+        }
+    }
+
+    pub fn generate_stats(&self, other: &Self) -> HashMap<String, Option<f32>> {
+        let mut res = HashMap::new();
+
+        for function_name in self.functions.keys() {
+            res.insert(
+                function_name.clone(),
+                self.get_function_stat(other, function_name),
+            );
+        }
+
+        res
     }
 
     pub fn from_object(raw_obj: &File) -> Result<Self, ExecutableError> {
@@ -316,5 +345,24 @@ impl Function {
         }
 
         Ok(res)
+    }
+
+    pub fn compute_raw_diff(&self, other: &Function) -> f32 {
+        let expected_function_size = self.data.len();
+        let mut matching_count = 0;
+
+        for (idx, a) in self.data.iter().enumerate() {
+            if let Some(b) = other.data.get(idx) {
+                if a == b {
+                    matching_count += 1;
+                }
+            }
+        }
+
+        let result = (matching_count as f32 / expected_function_size as f32) * 100.0;
+
+        assert!(result != 100.0 || expected_function_size == other.data.len());
+
+        result
     }
 }

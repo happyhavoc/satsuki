@@ -1,5 +1,8 @@
 use std::{
+    collections::HashMap,
     error::Error,
+    fs::File,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -26,6 +29,28 @@ struct TopLevel {
 #[argh(subcommand)]
 enum SubCommandEnum {
     Disassemble(DisassembleSubCommand),
+    Stats(StatsSubCommand),
+}
+
+/// Stats
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "stats")]
+struct StatsSubCommand {
+    /// original executable file to disassemble.
+    #[argh(positional)]
+    original_executable_file: PathBuf,
+
+    /// reimplementation executable file to disassemble.
+    #[argh(positional)]
+    reimplementation_executable_file: PathBuf,
+
+    /// pdb file related to the reimplementation executable.
+    #[argh(positional)]
+    pdb_file: PathBuf,
+
+    /// output file containing the stats.
+    #[argh(option)]
+    output_file: Option<PathBuf>,
 }
 
 #[derive(FromArgs, PartialEq, Debug)]
@@ -133,6 +158,68 @@ fn handle_disassemble(
     Ok(())
 }
 
+fn remap_report_value(data: (&String, &Option<f32>)) -> (String, String) {
+    let (key, value) = data;
+    if let Some(value) = value {
+        (key.clone(), format!("{value}%"))
+    } else {
+        (key.clone(), "MISSING".into())
+    }
+}
+
+fn handle_stats_report(mapping: Mapping, args: &StatsSubCommand) -> Result<(), Box<dyn Error>> {
+    let original_executable =
+        parse_object_with_mapping(&args.original_executable_file, mapping.clone())?;
+    let reimplement_executable = parse_object_with_pdb(
+        &args.reimplementation_executable_file,
+        &args.pdb_file,
+        mapping.clone(),
+    )?;
+
+    let mut global_match = 0.0;
+
+    let stats: HashMap<String, String> = original_executable
+        .generate_stats(&reimplement_executable)
+        .iter()
+        .map(|x| {
+            if let Some(value) = x.1 {
+                global_match += value;
+            }
+
+            remap_report_value(x)
+        })
+        .collect();
+
+    let global_raw_diff = global_match / original_executable.functions_count() as f32;
+
+    if let Some(output_file) = &args.output_file {
+        let mut file = File::create(output_file)?;
+
+        match output_file.extension() {
+            Some(test) if test.to_string_lossy() == "csv" => {
+                writeln!(file, "\"Function name\",\"Status\"")?;
+
+                for (key, value) in stats {
+                    writeln!(file, "\"{key}\",\"{value}\"")?;
+                }
+            }
+            _ => {
+                for (key, value) in stats {
+                    writeln!(file, "{key}: {value}")?;
+                }
+            }
+        }
+    } else {
+        for (key, value) in stats {
+            println!("{key}: {value}")
+        }
+    }
+
+    println!("GLOBAL: {global_raw_diff}%");
+
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args: TopLevel = argh::from_env();
 
@@ -145,8 +232,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mapping = toml::from_str::<Mapping>(&raw_mapping)?;
 
     match &args.subcommand {
-        SubCommandEnum::Disassemble(disassemble_args) => {
-            handle_disassemble(mapping, disassemble_args)
-        }
+        SubCommandEnum::Disassemble(args) => handle_disassemble(mapping, args),
+        SubCommandEnum::Stats(args) => handle_stats_report(mapping, args),
     }
 }
