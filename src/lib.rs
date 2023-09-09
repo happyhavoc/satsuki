@@ -6,7 +6,9 @@ use std::collections::hash_map::Iter;
 use std::fmt::Write;
 use std::{collections::HashMap, error::Error};
 
-use capstone::Capstone;
+use capstone::arch::x86::{X86Operand, X86OperandType};
+use capstone::arch::ArchOperand;
+use capstone::{Capstone, Insn};
 use object::{File, Object, ObjectSection, ObjectSymbol, SymbolKind};
 use pdb::{FallibleIterator, ProcedureSymbol, PublicSymbol, Source, SymbolData, PDB};
 use serde::Deserialize;
@@ -135,6 +137,12 @@ impl Executable {
 
     pub fn get_function(&self, name: &String) -> Option<&Function> {
         self.functions.get(name)
+    }
+
+    pub fn get_function_by_address(&self, address: usize) -> Option<&Function> {
+        self.functions
+            .values()
+            .find(|&function| function.address == address)
     }
 
     pub fn get_function_stat(&self, other: &Self, name: &String) -> Option<f32> {
@@ -318,10 +326,80 @@ pub struct Function {
 }
 
 impl Function {
+    fn format_instruction(
+        &self,
+        ctx: &Capstone,
+        executable: &Executable,
+        force_address_zero: bool,
+        resolve_names: bool,
+        instruction: &Insn<'_>,
+    ) -> Result<String, ExecutableError> {
+        let mut res = String::new();
+        let detail = ctx.insn_detail(instruction)?;
+        let arch_detail = detail.arch_detail();
+        let groups = detail.groups();
+        let mut group_names = Vec::new();
+
+        for group in groups {
+            let group_name = ctx.group_name(*group).expect("Cannot grab group name!");
+
+            group_names.push(group_name);
+        }
+
+        let mut has_custom_format = false;
+
+        if resolve_names {
+            // Handle relative call
+            if group_names.contains(&"call".into())
+                && group_names.contains(&"branch_relative".into())
+            {
+                let ops = arch_detail.operands();
+
+                if ops.len() == 1 {
+                    if let ArchOperand::X86Operand(X86Operand {
+                        op_type: X86OperandType::Imm(immediate),
+                        ..
+                    }) = ops[0]
+                    {
+                        let immediate = if force_address_zero {
+                            self.address + immediate as usize
+                        } else {
+                            immediate as usize
+                        };
+
+                        if let Some(target_function) = executable.get_function_by_address(immediate)
+                        {
+                            if let Some(mnemonic) = instruction.mnemonic() {
+                                writeln!(res, "{} {}", mnemonic, target_function.name)?;
+
+                                has_custom_format = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !has_custom_format {
+            if let Some(mnemonic) = instruction.mnemonic() {
+                write!(res, "{} ", mnemonic)?;
+                if let Some(op_str) = instruction.op_str() {
+                    write!(res, "{}", op_str)?;
+                }
+
+                res.push('\n');
+            }
+        }
+
+        Ok(res)
+    }
+
     pub fn disassemble(
         &self,
         ctx: &Capstone,
+        executable: &Executable,
         force_address_zero: bool,
+        resolve_names: bool,
     ) -> Result<String, ExecutableError> {
         let address = if force_address_zero {
             0
@@ -334,14 +412,13 @@ impl Function {
         let mut res = String::new();
 
         for instruction in instructions.iter() {
-            if let Some(mnemonic) = instruction.mnemonic() {
-                write!(res, "{} ", mnemonic)?;
-                if let Some(op_str) = instruction.op_str() {
-                    write!(res, "{}", op_str)?;
-                }
-
-                res.push('\n');
-            }
+            res.push_str(&self.format_instruction(
+                ctx,
+                executable,
+                force_address_zero,
+                resolve_names,
+                instruction,
+            )?);
         }
 
         Ok(res)

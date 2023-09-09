@@ -98,6 +98,10 @@ struct DisassembleSubCommand {
     /// use at&t syntax when printing assembly.
     #[argh(switch)]
     att: bool,
+
+    /// enable name resolution for calls.
+    #[argh(switch)]
+    resolve_names: bool,
 }
 
 fn parse_object_with_mapping(
@@ -166,7 +170,12 @@ fn handle_disassemble(
     match executable.get_function(&args.function_name) {
         Some(function) => {
             let res = function
-                .disassemble(&capstone, args.force_address_zero)
+                .disassemble(
+                    &capstone,
+                    &executable,
+                    args.force_address_zero,
+                    args.resolve_names,
+                )
                 .unwrap();
 
             println!("{}", res);
