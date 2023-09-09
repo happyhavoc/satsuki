@@ -361,7 +361,7 @@ impl Function {
                         ..
                     }) = ops[0]
                     {
-                        let is_32bit = !group_names.contains(&"not64bitmode".into());
+                        let is_32bit = group_names.contains(&"not64bitmode".into());
                         let target_address = if force_address_zero {
                             if is_32bit {
                                 (self.address as i32 + immediate as i32) as usize
