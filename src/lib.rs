@@ -361,13 +361,19 @@ impl Function {
                         ..
                     }) = ops[0]
                     {
-                        let immediate = if force_address_zero {
-                            self.address + immediate as usize
+                        let is_32bit = !group_names.contains(&"not64bitmode".into());
+                        let target_address = if force_address_zero {
+                            if is_32bit {
+                                (self.address as i32 + immediate as i32) as usize
+
+                            } else {
+                                (self.address as i64 + immediate) as usize
+                            }
                         } else {
                             immediate as usize
                         };
 
-                        if let Some(target_function) = executable.get_function_by_address(immediate)
+                        if let Some(target_function) = executable.get_function_by_address(target_address)
                         {
                             if let Some(mnemonic) = instruction.mnemonic() {
                                 writeln!(res, "{} {}", mnemonic, target_function.name)?;
