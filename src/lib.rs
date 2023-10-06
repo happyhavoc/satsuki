@@ -7,8 +7,10 @@ use std::fmt::Write;
 use std::{collections::HashMap, error::Error};
 
 use capstone::arch::x86::{X86Operand, X86OperandType};
+use capstone::arch::x86::X86InsnGroup::*;
 use capstone::arch::ArchOperand;
-use capstone::{Capstone, Insn};
+use capstone::{Capstone, Insn, InsnDetail, Instructions};
+use capstone::InsnGroupType::*;
 use object::{File, Object, ObjectSection, ObjectSymbol, SymbolKind};
 use pdb::{FallibleIterator, ProcedureSymbol, PublicSymbol, Source, SymbolData, PDB};
 use serde::Deserialize;
@@ -326,42 +328,23 @@ pub struct Function {
 }
 
 impl Function {
-    fn format_instruction(
-        &self,
-        ctx: &Capstone,
-        executable: &Executable,
-        force_address_zero: bool,
-        resolve_names: bool,
-        instruction: &Insn<'_>,
-    ) -> Result<String, ExecutableError> {
-        let mut res = String::new();
-        let detail = ctx.insn_detail(instruction)?;
-        let arch_detail = detail.arch_detail();
-        let groups = detail.groups();
-        let mut group_names = Vec::new();
-
-        for group in groups {
-            let group_name = ctx.group_name(*group).expect("Cannot grab group name!");
-
-            group_names.push(group_name);
-        }
-
-        let mut has_custom_format = false;
-
-        if resolve_names {
-            // Handle relative call
-            if group_names.contains(&"call".into())
-                && group_names.contains(&"branch_relative".into())
-            {
+    fn find_labels(&self, ctx: &Capstone, force_address_zero: bool, instructions: &Instructions<'_>) -> Result<HashMap<u64, String>, ExecutableError> {
+        let mut labels = HashMap::new();
+        let mut idx = 0;
+        for instruction in instructions.iter() {
+            let detail = ctx.insn_detail(instruction)?;
+            let groups = detail.groups().iter().map(|v| u32::from(v.0));
+            let is_jump = groups.clone().any(|v| v == CS_GRP_JUMP);
+            let is_32bit = groups.clone().any(|v| v == X86_GRP_NOT64BITMODE);
+            if is_jump {
+                let arch_detail = detail.arch_detail();
                 let ops = arch_detail.operands();
-
                 if ops.len() == 1 {
                     if let ArchOperand::X86Operand(X86Operand {
                         op_type: X86OperandType::Imm(immediate),
                         ..
                     }) = ops[0]
                     {
-                        let is_32bit = group_names.contains(&"not64bitmode".into());
                         let target_address = if force_address_zero {
                             if is_32bit {
                                 (self.address as i32 + immediate as i32) as usize
@@ -372,15 +355,93 @@ impl Function {
                         } else {
                             immediate as usize
                         };
-
-                        if let Some(target_function) = executable.get_function_by_address(target_address)
-                        {
-                            if let Some(mnemonic) = instruction.mnemonic() {
-                                writeln!(res, "{} {}", mnemonic, target_function.name)?;
-
-                                has_custom_format = true;
+                        if (self.address..self.address + self.data.len()).contains(&target_address) {
+                            let addr = (target_address - self.address) as u64;
+                            if !labels.contains_key(&addr) {
+                                idx += 1;
+                                labels.insert(addr, format!("L_{idx}"));
                             }
                         }
+                    }
+                }
+            }
+        }
+        Ok(labels)
+    }
+    fn format_instruction(
+        &self,
+        ctx: &Capstone,
+        executable: &Executable,
+        force_address_zero: bool,
+        resolve_names: bool,
+        labels: &HashMap<u64, String>,
+        instruction: &Insn<'_>,
+    ) -> Result<String, ExecutableError> {
+        let mut res = String::new();
+        let detail = ctx.insn_detail(instruction)?;
+        let groups = detail.groups().iter().map(|v| u32::from(v.0));
+
+        let is_call = groups.clone().any(|v| v == CS_GRP_CALL);
+        let is_branch_relative = groups.clone().any(|v| v == CS_GRP_BRANCH_RELATIVE);
+        let is_jump = groups.clone().any(|v| v == CS_GRP_JUMP);
+        let is_32bit = groups.clone().any(|v| v == X86_GRP_NOT64BITMODE);
+
+        let mut has_custom_format = false;
+
+        // Handle relative call
+        fn get_imm(fn_address: usize, detail: &InsnDetail<'_>, is_32bit: bool, force_address_zero: bool) -> Option<usize> {
+            let arch_detail = detail.arch_detail();
+            let ops = arch_detail.operands();
+
+            if ops.len() == 1 {
+                if let ArchOperand::X86Operand(X86Operand {
+                    op_type: X86OperandType::Imm(immediate),
+                    ..
+                }) = ops[0]
+                {
+                    let target_address = if force_address_zero {
+                        if is_32bit {
+                            (fn_address as i32 + immediate as i32) as usize
+
+                        } else {
+                            (fn_address as i64 + immediate) as usize
+                        }
+                    } else {
+                        immediate as usize
+                    };
+
+                    return Some(target_address);
+                }
+            }
+
+            None
+        }
+
+
+        if resolve_names {
+            // Handle relative call
+            if is_call && is_branch_relative {
+                if let Some(target_address) = get_imm(self.address, &detail, is_32bit, force_address_zero) {
+                    if let Some(target_function) = executable.get_function_by_address(target_address)
+                    {
+                        if let Some(mnemonic) = instruction.mnemonic() {
+                            writeln!(res, "    {} {}", mnemonic, target_function.name)?;
+
+                            has_custom_format = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if !has_custom_format && is_jump {
+            if let Some(target_address) = get_imm(self.address, &detail, is_32bit, force_address_zero) {
+                let relative_addr = target_address - self.address;
+                if let Some(label) = labels.get(&(relative_addr as u64)) {
+                    if let Some(mnemonic) = instruction.mnemonic() {
+                        writeln!(res, "    {} {}", mnemonic, label)?;
+
+                        has_custom_format = true;
                     }
                 }
             }
@@ -388,7 +449,7 @@ impl Function {
 
         if !has_custom_format {
             if let Some(mnemonic) = instruction.mnemonic() {
-                write!(res, "{} ", mnemonic)?;
+                write!(res, "    {} ", mnemonic)?;
                 if let Some(op_str) = instruction.op_str() {
                     write!(res, "{}", op_str)?;
                 }
@@ -417,12 +478,21 @@ impl Function {
 
         let mut res = String::new();
 
+        // First, find the labels
+        let labels = self.find_labels(ctx, force_address_zero, &instructions)?;
+
         for instruction in instructions.iter() {
+            let insn_addr = instruction.address() as u64 - address;
+
+            if let Some(label) = labels.get(&insn_addr) {
+                res.push_str(&format!("{label}:\n"));
+            }
             res.push_str(&self.format_instruction(
                 ctx,
                 executable,
                 force_address_zero,
                 resolve_names,
+                &labels,
                 instruction,
             )?);
         }
