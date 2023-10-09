@@ -1,0 +1,27 @@
+name: Build binary
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+    - uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --release --target x86_64-pc-windows-msvc
+    - uses: actions/upload-artifact@v3
+      with:
+        name: win64-satsuki
+        path: target/x86_64-pc-windows-msvc/release/satsuki.exe
