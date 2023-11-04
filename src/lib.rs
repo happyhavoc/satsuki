@@ -7,9 +7,11 @@ use std::fmt::Write;
 use std::{collections::HashMap, error::Error};
 
 use capstone::arch::x86::{X86Operand, X86OperandType};
+use capstone::arch::x86::X86Prefix::X86_PREFIX_REP;
+use capstone::arch::x86::X86Insn::X86_INS_STOSD;
 use capstone::arch::x86::X86InsnGroup::*;
 use capstone::arch::ArchOperand;
-use capstone::{Capstone, Insn, InsnDetail, Instructions};
+use capstone::{Capstone, Insn, InsnDetail, InsnId, Instructions};
 use capstone::InsnGroupType::*;
 use object::{File, Object, ObjectSection, ObjectSymbol, SymbolKind};
 use pdb::{FallibleIterator, ProcedureSymbol, PublicSymbol, Source, SymbolData, PDB};
@@ -385,6 +387,8 @@ impl Function {
         let is_branch_relative = groups.clone().any(|v| v == CS_GRP_BRANCH_RELATIVE);
         let is_jump = groups.clone().any(|v| v == CS_GRP_JUMP);
         let is_32bit = groups.clone().any(|v| v == X86_GRP_NOT64BITMODE);
+        let is_rep = detail.arch_detail().x86().unwrap().prefix()[0] == X86_PREFIX_REP as _;
+        let is_stosd = instruction.id() == InsnId(X86_INS_STOSD as _);
 
         let mut has_custom_format = false;
 
@@ -445,6 +449,13 @@ impl Function {
                     }
                 }
             }
+        }
+
+        if !has_custom_format && is_rep && is_stosd {
+            // The default formatter will write this as `rep stosd dword ptr es:[edi], eax`, which
+            // decompme does not like.
+            writeln!(res, "    rep stosd")?;
+            has_custom_format = true;
         }
 
         if !has_custom_format {
