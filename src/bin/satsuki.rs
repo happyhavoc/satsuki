@@ -173,6 +173,7 @@ fn handle_disassemble(
                 .disassemble(
                     &capstone,
                     &executable,
+                    !args.att,
                     args.force_address_zero,
                     args.resolve_names,
                 )

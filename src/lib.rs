@@ -374,6 +374,7 @@ impl Function {
         &self,
         ctx: &Capstone,
         executable: &Executable,
+        intel_syntax: bool,
         force_address_zero: bool,
         resolve_names: bool,
         labels: &HashMap<u64, String>,
@@ -451,7 +452,7 @@ impl Function {
             }
         }
 
-        if !has_custom_format && is_rep && is_stosd {
+        if !has_custom_format && intel_syntax && is_rep && is_stosd {
             // The default formatter will write this as `rep stosd dword ptr es:[edi], eax`, which
             // decompme does not like.
             writeln!(res, "    rep stosd")?;
@@ -476,6 +477,7 @@ impl Function {
         &self,
         ctx: &Capstone,
         executable: &Executable,
+        intel_syntax: bool,
         force_address_zero: bool,
         resolve_names: bool,
     ) -> Result<String, ExecutableError> {
@@ -501,6 +503,7 @@ impl Function {
             res.push_str(&self.format_instruction(
                 ctx,
                 executable,
+                intel_syntax,
                 force_address_zero,
                 resolve_names,
                 &labels,
