@@ -22,7 +22,11 @@ struct TopLevel {
 
     /// mapping TOML file related to the executable.
     #[argh(option)]
-    mapping_file: PathBuf,
+    mapping_file: Option<PathBuf>,
+
+    /// mapping CSV file related to the executable.
+    #[argh(option)]
+    mapping_file_csv: Option<PathBuf>,
 }
 
 #[derive(FromArgs, PartialEq, Debug)]
@@ -276,13 +280,36 @@ fn handle_badge(mapping: Mapping, args: &BadgeSubCommand) -> Result<(), Box<dyn 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: TopLevel = argh::from_env();
 
-    if !args.mapping_file.exists() {
+    let (mapping_file, is_csv) = match (args.mapping_file, args.mapping_file_csv) {
+        (None, None) => {
+            eprintln!("This tool needs a mapping file to function. Pass one using --mapping-file or --mapping-file-csv");
+            std::process::exit(1);
+        },
+        (Some(_), Some(_)) => {
+            eprintln!("Can't pass both a TOML and CSV mapping file. Only pass one of --mapping-file or --mapping-file-csv");
+            std::process::exit(1);
+        },
+        (Some(toml), None) => (toml, false),
+        (None, Some(csv)) => (csv, true),
+    };
+
+    if !mapping_file.exists() {
         eprintln!("Mapping not found!\n");
         std::process::exit(1);
     }
 
-    let raw_mapping = std::fs::read_to_string(args.mapping_file)?;
-    let mapping = toml::from_str::<Mapping>(&raw_mapping)?;
+    let raw_mapping = std::fs::read_to_string(mapping_file)?;
+
+    let mapping = if is_csv {
+        let mut rdr = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(raw_mapping.as_bytes());
+        Mapping {
+            function: Some(Result::from_iter(rdr.deserialize())?)
+        }
+    } else {
+        toml::from_str::<Mapping>(&raw_mapping)?
+    };
 
     match &args.subcommand {
         SubCommandEnum::Disassemble(args) => handle_disassemble(mapping, args),
