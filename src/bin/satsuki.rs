@@ -303,6 +303,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mapping = if is_csv {
         let mut rdr = csv::ReaderBuilder::new()
             .has_headers(false)
+            .flexible(true)
             .from_reader(raw_mapping.as_bytes());
         Mapping {
             function: Some(Result::from_iter(rdr.deserialize())?)
